@@ -1,0 +1,97 @@
+import pandas as pd
+import warnings
+import numpy as np
+warnings.filterwarnings("ignore")
+
+tickers_prices=["SPY US Equity", "TLT US Equity","VIX Index"]
+
+#df is the daily data for all three tickers
+
+# Calculating returns and rest
+for i in range(0,len(tickers_prices)-1):
+    df[str(tickers_prices[i])[0:4]+'Ret']=df[tickers_prices[i]].pct_change(1)
+# We define the window size for the calculating the volatility 
+window_size=20
+df['Realized Vol']=df[tickers_prices[0]].pct_change(1).rolling(window_size).std()*(252**0.5)*100
+data=df.dropna()
+
+# Option 1: Long Market if Vol_spread=Realized-Implied <0, otherwise invest in cash
+
+df.loc[df['Realized Vol'].shift(1) < df['VIX Index'].shift(1), "Option1 Ret"]=df['SPY Ret']
+df.loc[df['Realized Vol'].shift(1) > df['VIX Index'].shift(1), "Option1 Ret"]=df['TLT Ret']
+
+#WE add transaction costs
+Daily_fee=0
+
+data['Option1 Ret']=df["Option1 Ret"]-Daily_fee
+
+# Option 2: We look at the increase of both Vols:
+#      - if Increase of Realized Vol > Increase Implied Vol, then go to TLT, otherwise go to SPY
+n=5
+a=range(1,len(data))
+
+df.loc[df['Realized Vol'].pct_change(n).shift(1) < df['VIX Index'].pct_change(n).shift(1), "Option2 Ret"]=df['SPY Ret']
+df.loc[df['Realized Vol'].pct_change(n).shift(1) > df['VIX Index'].pct_change(n).shift(1), "Option2 Ret"]=df['TLT Ret']
+
+Daily_fee=0
+
+data['Option2 Ret']=df["Option2 Ret"]-Daily_fee
+
+data=data.fillna(0)
+
+#We create the equity curves
+
+data["60RV/40RF Ret"]=0.6*data["SPY Ret"]+0.4*data["TLT Ret"]
+    
+data["SPY Port"]=100*(1+data["SPY Ret"]).cumprod()
+data["60RV/40RF Port"]=100*(1+data["60RV/40RF Ret"]).cumprod()
+data["Option1 Port"]=100*(1+data["Option1 Ret"]).cumprod()
+data["Option2 Port"]=100*(1+data["Option2 Ret"]).cumprod()
+
+def Drawdown(return_series):
+    """
+    Documentation String:
+    Takes a Timeseries of Equity return.
+    Computes and returns a Data frame with:
+    1. Wealth index
+    2. Previous peaks
+    3. Percentage Drawdown
+    """
+    wealth_index= 100*(1+return_series).cumprod()
+    previous_peaks=wealth_index.cummax()
+    drawdown=(wealth_index-previous_peaks)/previous_peaks
+    
+    return pd.DataFrame({
+        "Wealth": wealth_index,
+        "peaks": previous_peaks,
+        "Drawdown": drawdown
+    })
+    
+#Let's create a table to present all statistics
+
+Columns=['Total Return', 'Ann_Return', 'Ann_Volatility', 'Sharpe Ratio', 'Max_Drawdown']
+Index=["SPY",'60RV/40RF','Option1','Option2']
+Statistics=pd.DataFrame(columns=Columns, index=Index)
+
+for row in Index:
+    Statistics.loc[row]=[100*(data[row+" Port"].iloc[-1]-data[row+" Port"].iloc[0])/data[row+" Port"].iloc[0],
+                          data[row+" Ret"].mean()*252*100, data[row+" Ret"].std()*np.sqrt(252)*100,
+                          (data[row+" Ret"].mean()*252)/(data[row+" Ret"].std()*np.sqrt(252)),
+                          Drawdown(data[row+" Ret"])['Drawdown'].min()*100]
+
+Statistics
+
+# Now we create a dataframe with all daily drawdowns for all four portfolios
+
+Portfolios=["SPY",'60RV/40RF','Option1','Option2']
+DD=pd.DataFrame(index=range(len(data)), columns=Portfolios)
+
+for col in Portfolios:
+    for i in range(len(data)):
+        DD.loc[i,col]=Drawdown(data[col+" Ret"]).iloc[i,2]
+DD.index=data.index
+
+# And we plot it
+
+DD.plot(kind="line")
+data.iloc[:,[-4,-3,-2,-1]].plot(kind="line",logy=True)
